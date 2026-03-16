@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 # Unlike sentence-transformers, TF-IDF must be fitted on a corpus first.
 # We expose a simple wrapper that VectorStore will call.
 
-_vectorizer: TfidfVectorizer | None = None
+from typing import Optional
+
+_vectorizer: Optional[TfidfVectorizer] = None
 
 
 def create_vectorizer(corpus: list[str]) -> TfidfVectorizer:
