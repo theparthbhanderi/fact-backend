@@ -36,7 +36,3 @@ python-multipart
 # === Database (STEP 7) ===
 sqlalchemy
 
-# === Image Processing & OCR (STEP 6) ===
-pytesseract
-Pillow
-python-multipart
