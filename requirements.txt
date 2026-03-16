@@ -30,5 +30,8 @@ pytesseract
 Pillow
 python-multipart
 
+# === Spell Correction ===
+textblob
+
 # === Database ===
 sqlalchemy
