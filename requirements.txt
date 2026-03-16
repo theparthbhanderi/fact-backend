@@ -14,10 +14,10 @@ lxml-html-clean==0.4.4
 
 # === AI / ML — Embeddings ===
 sentence-transformers==3.1.1
-numpy==1.26.4
+numpy>=1.21.0,<2.0.0
 
 # === Vector Database ===
-faiss-cpu==1.8.0.post1
+faiss-cpu
 
 # === LLM (future STEP 3) ===
 langchain==0.3.1
