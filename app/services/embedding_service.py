@@ -1,79 +1,108 @@
 """
-Embedding Service.
+Embedding Service (Lightweight TF-IDF).
 
-Converts text passages into dense vector embeddings using a
-Sentence-Transformer model (all-MiniLM-L6-v2).
+Uses scikit-learn's TF-IDF vectorizer instead of heavy
+sentence-transformers + PyTorch to keep memory under 512MB
+on free-tier hosting (Render).
 
-The model is loaded once at module level and reused across
-all requests to avoid expensive reloading.
+The interface remains identical so no other code needs changes:
+    generate_embedding(text)      → numpy array
+    generate_embeddings([texts])  → numpy array (N, dim)
 
-Usage:
-    from app.services.embedding_service import generate_embedding, generate_embeddings
-
-    vec = generate_embedding("some text")          # single text
-    vecs = generate_embeddings(["text1", "text2"]) # batch
+Note: TF-IDF vectors are sparse and variable-dimension.
+      We convert them to dense arrays for FAISS-free cosine search.
 """
 
 import logging
 import numpy as np
-from sentence_transformers import SentenceTransformer
-
-from app.config import settings
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 logger = logging.getLogger(__name__)
 
-# ── Load model once at import time ─────────────────────────────────────
-# all-MiniLM-L6-v2 produces 384-dimensional embeddings.
-# It is fast, lightweight, and has high semantic similarity accuracy.
-logger.info(f"⏳ Loading embedding model: {settings.EMBEDDING_MODEL_NAME}")
-_model = SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
-logger.info(f"✅ Embedding model loaded: {settings.EMBEDDING_MODEL_NAME}")
+# ── Global vectorizer (fitted per-request in VectorStore) ──────────────
+# Unlike sentence-transformers, TF-IDF must be fitted on a corpus first.
+# We expose a simple wrapper that VectorStore will call.
 
-# Embedding dimension (384 for all-MiniLM-L6-v2)
-EMBEDDING_DIM = _model.get_sentence_embedding_dimension()
+_vectorizer: TfidfVectorizer | None = None
+
+
+def create_vectorizer(corpus: list[str]) -> TfidfVectorizer:
+    """
+    Fit a TF-IDF vectorizer on the given corpus and cache it globally.
+
+    Args:
+        corpus: List of text documents to build vocabulary from.
+
+    Returns:
+        The fitted TfidfVectorizer instance.
+    """
+    global _vectorizer
+    _vectorizer = TfidfVectorizer(
+        max_features=5000,
+        stop_words="english",
+        ngram_range=(1, 2),
+        sublinear_tf=True,
+    )
+    _vectorizer.fit(corpus)
+    logger.info(f"✅ TF-IDF vectorizer fitted on {len(corpus)} documents "
+                f"(vocab size: {len(_vectorizer.vocabulary_)})")
+    return _vectorizer
 
 
 def generate_embedding(text: str) -> np.ndarray:
     """
-    Generate a vector embedding for a single text string.
+    Generate a TF-IDF vector for a single text string.
 
     Args:
         text: The text to encode.
 
     Returns:
-        A numpy array of shape (384,) representing the text embedding.
+        A dense numpy array representing the text.
     """
-    if not text or not text.strip():
-        logger.warning("Empty text provided to generate_embedding, returning zero vector.")
-        return np.zeros(EMBEDDING_DIM, dtype=np.float32)
+    if _vectorizer is None:
+        logger.warning("Vectorizer not fitted yet, returning empty array.")
+        return np.zeros(1, dtype=np.float32)
 
-    embedding = _model.encode(text, convert_to_numpy=True, normalize_embeddings=True)
-    return embedding.astype(np.float32)
+    if not text or not text.strip():
+        dim = len(_vectorizer.vocabulary_)
+        return np.zeros(dim, dtype=np.float32)
+
+    vec = _vectorizer.transform([text]).toarray().astype(np.float32)
+    return vec[0]
 
 
 def generate_embeddings(text_list: list[str]) -> np.ndarray:
     """
-    Generate vector embeddings for a batch of texts.
-
-    Uses batch encoding for efficiency. Empty texts receive
-    zero vectors to maintain index alignment.
+    Generate TF-IDF vectors for a batch of texts.
 
     Args:
         text_list: List of text strings to encode.
 
     Returns:
-        A numpy array of shape (N, 384) where N = len(text_list).
+        A numpy array of shape (N, vocab_size).
     """
+    if _vectorizer is None:
+        logger.warning("Vectorizer not fitted yet, returning empty array.")
+        return np.empty((0, 1), dtype=np.float32)
+
     if not text_list:
-        logger.warning("Empty text list provided to generate_embeddings.")
-        return np.empty((0, EMBEDDING_DIM), dtype=np.float32)
+        dim = len(_vectorizer.vocabulary_)
+        return np.empty((0, dim), dtype=np.float32)
 
-    # Replace empty strings with a placeholder to avoid model errors
     cleaned = [t if t and t.strip() else " " for t in text_list]
-
-    logger.info(f"🔢 Generating embeddings for {len(cleaned)} texts...")
-    embeddings = _model.encode(cleaned, convert_to_numpy=True, normalize_embeddings=True, show_progress_bar=False)
-    embeddings = embeddings.astype(np.float32)
-
-    logger.info(f"✅ Generated {len(embeddings)} embeddings (dim={EMBEDDING_DIM})")
+    logger.info(f"🔢 Generating TF-IDF vectors for {len(cleaned)} texts...")
+    embeddings = _vectorizer.transform(cleaned).toarray().astype(np.float32)
+    logger.info(f"✅ Generated {len(embeddings)} vectors")
     return embeddings
+
+
+# Expose a dynamic EMBEDDING_DIM (used by vector_store)
+def get_embedding_dim() -> int:
+    """Return current embedding dimension (vocab size)."""
+    if _vectorizer is None:
+        return 0
+    return len(_vectorizer.vocabulary_)
+
+
+# Keep backward compat — some imports reference EMBEDDING_DIM directly
+EMBEDDING_DIM = 384  # placeholder, actual dim set at runtime

@@ -4,3 +4,5 @@ vector_db/
 __pycache__/
 factchecker.db
 *.pyc
+w.env.render
+.env.render

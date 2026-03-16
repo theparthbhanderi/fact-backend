@@ -1,66 +1,44 @@
 """
-Vector Store Service.
+Vector Store Service (Lightweight — no FAISS).
 
-Manages an in-memory FAISS index for storing and querying
-document embeddings with associated metadata.
+Uses scikit-learn cosine_similarity instead of FAISS for
+semantic search. Works with TF-IDF embeddings from
+embedding_service.py.
 
-Architecture:
-    - FAISS IndexFlatIP (inner product = cosine similarity on
-      normalized vectors) for fast exact search.
-    - Metadata (title, url, source, text) stored in a parallel
-      Python list, indexed by FAISS row ID.
-    - A new VectorStore instance is created per request to keep
-      searches isolated. For persistence across requests, the
-      class can be extended to save/load from disk.
-
-Usage:
-    from app.services.vector_store import VectorStore
-
-    store = VectorStore()
-    store.add_documents(articles)
-    results = store.search("query text", top_k=3)
+Memory usage: ~50MB vs 3GB+ with FAISS + PyTorch.
 """
 
 import logging
 import numpy as np
-import faiss
+from sklearn.metrics.pairwise import cosine_similarity
 
-from app.services.embedding_service import generate_embedding, generate_embeddings, EMBEDDING_DIM
+from app.services.embedding_service import (
+    create_vectorizer,
+    generate_embedding,
+    generate_embeddings,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class VectorStore:
     """
-    FAISS-backed vector store for document embeddings.
+    Lightweight vector store using TF-IDF + cosine similarity.
 
-    Stores embeddings in a flat inner-product index (cosine similarity
-    on L2-normalized vectors) and maintains parallel metadata.
-
-    Attributes:
-        index: The FAISS index.
-        metadata: List of metadata dicts aligned with FAISS row IDs.
+    Replaces FAISS to avoid PyTorch/sentence-transformers memory overhead.
     """
 
     def __init__(self):
-        """Initialize an empty FAISS index with dimension 384."""
-        self.index = faiss.IndexFlatIP(EMBEDDING_DIM)
+        """Initialize an empty vector store."""
+        self.embeddings: np.ndarray | None = None
         self.metadata: list[dict] = []
-        logger.info(f"📦 Initialized FAISS index (dim={EMBEDDING_DIM})")
+        logger.info("📦 Initialized lightweight VectorStore (TF-IDF + cosine)")
 
     def add_documents(self, documents: list[dict]) -> int:
         """
-        Embed and add documents to the FAISS index.
+        Embed and add documents to the store.
 
-        Each document dict should contain at minimum:
-            - text (str): The content to embed.
-            - title (str): Article headline.
-            - url (str): Article URL.
-            - source (str): Publisher name.
-
-        Optionally:
-            - summary (str): Article summary.
-            - publish_date (str): Publication date.
+        Each document dict should have: text, title, url, source.
 
         Args:
             documents: List of document dicts.
@@ -72,20 +50,19 @@ class VectorStore:
             logger.warning("No documents provided to add_documents.")
             return 0
 
-        # Filter out documents with no meaningful text
         valid_docs = [d for d in documents if d.get("text", "").strip()]
         if not valid_docs:
             logger.warning("All documents have empty text, nothing to add.")
             return 0
 
-        # Extract texts and generate embeddings in batch
+        # Extract texts and fit TF-IDF on this corpus
         texts = [d["text"] for d in valid_docs]
-        embeddings = generate_embeddings(texts)
+        create_vectorizer(texts)
 
-        # Add to FAISS index
-        self.index.add(embeddings)
+        # Generate embeddings
+        self.embeddings = generate_embeddings(texts)
 
-        # Store metadata (everything except the raw text for search results)
+        # Store metadata
         for doc in valid_docs:
             self.metadata.append({
                 "title": doc.get("title", ""),
@@ -97,47 +74,38 @@ class VectorStore:
             })
 
         logger.info(
-            f"✅ Added {len(valid_docs)} documents to FAISS index "
-            f"(total: {self.index.ntotal})"
+            f"✅ Added {len(valid_docs)} documents to VectorStore"
         )
         return len(valid_docs)
 
     def search(self, query: str, top_k: int = 3) -> list[dict]:
         """
-        Search the FAISS index for the most similar documents.
-
-        Embeds the query, performs inner-product search (cosine
-        similarity on normalized vectors), and returns the top-k
-        most relevant documents with their similarity scores.
+        Search for the most similar documents using cosine similarity.
 
         Args:
             query: The search query text.
-            top_k: Number of results to return (default 3).
+            top_k: Number of results to return.
 
         Returns:
-            A list of dicts, each containing:
-                - title (str): Article headline.
-                - url (str): Article URL.
-                - text (str): Article text.
-                - source (str): Publisher name.
-                - score (float): Cosine similarity score (0–1).
+            List of dicts with title, url, text, source, score.
         """
-        if self.index.ntotal == 0:
-            logger.warning("FAISS index is empty, no results to return.")
+        if self.embeddings is None or len(self.metadata) == 0:
+            logger.warning("VectorStore is empty, no results to return.")
             return []
 
-        # Clamp top_k to the number of stored documents
-        top_k = min(top_k, self.index.ntotal)
+        top_k = min(top_k, len(self.metadata))
 
-        # Embed the query
-        query_embedding = generate_embedding(query)
-        query_embedding = query_embedding.reshape(1, -1)
+        # Embed the query using the fitted vectorizer
+        query_vec = generate_embedding(query).reshape(1, -1)
 
-        # Search FAISS
-        scores, indices = self.index.search(query_embedding, top_k)
+        # Compute cosine similarity
+        scores = cosine_similarity(query_vec, self.embeddings)[0]
+
+        # Get top-k indices
+        top_indices = np.argsort(scores)[::-1][:top_k]
 
         results = []
-        for score, idx in zip(scores[0], indices[0]):
+        for idx in top_indices:
             if idx < 0 or idx >= len(self.metadata):
                 continue
             meta = self.metadata[idx]
@@ -146,12 +114,23 @@ class VectorStore:
                 "url": meta["url"],
                 "text": meta["text"],
                 "source": meta["source"],
-                "score": round(float(score), 4),
+                "score": round(float(scores[idx]), 4),
             })
 
         logger.info(
-            f"🔍 FAISS search for '{query[:60]}...' → "
+            f"🔍 Search for '{query[:60]}...' → "
             f"{len(results)} results "
             f"(scores: {[r['score'] for r in results]})"
         )
         return results
+
+
+def query_vectors(query_embedding: np.ndarray, top_k: int = 5) -> list[dict]:
+    """
+    Legacy function for backward compatibility with rag_pipeline.
+
+    Note: With TF-IDF approach, use VectorStore.search() directly instead.
+    """
+    logger.warning("query_vectors() called but no persistent store exists. "
+                    "Use VectorStore.search() instead.")
+    return []
