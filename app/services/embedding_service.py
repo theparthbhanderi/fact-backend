@@ -11,21 +11,14 @@ The interface remains identical for callers:
 
 import logging
 import numpy as np
+import threading
 from app.services.cache_service import disk_cache, DiskCache
 
 logger = logging.getLogger(__name__)
 
-# Fallback in case sentence-transformers isn't fully installed yet during hot-reloads
-try:
-    from sentence_transformers import SentenceTransformer
-    logger.info("🧠 Loading SentenceTransformer model: all-MiniLM-L6-v2")
-    embedder = SentenceTransformer('all-MiniLM-L6-v2')
-except ImportError:
-    logger.warning("⚠️ sentence-transformers not installed or loading failed.")
-    embedder = None
-except Exception as e:
-    logger.error(f"❌ Failed to load SentenceTransformer: {e}")
-    embedder = None
+_embedder = None
+_embedder_lock = threading.Lock()
+_embedder_load_attempted = False
 
 EMBEDDING_DIM = 384
 
@@ -37,6 +30,46 @@ def create_vectorizer(corpus: list[str]):
 def get_embedding_dim() -> int:
     """Return embedding dimension (384 for all-MiniLM-L6-v2)."""
     return EMBEDDING_DIM
+
+
+def _get_embedder():
+    """
+    Lazy-load SentenceTransformer to avoid high memory usage at import time.
+    Returns None if model can't be loaded.
+    """
+    global _embedder, _embedder_load_attempted
+    if _embedder is not None:
+        return _embedder
+    if _embedder_load_attempted:
+        return None
+
+    with _embedder_lock:
+        if _embedder is not None:
+            return _embedder
+        if _embedder_load_attempted:
+            return None
+        _embedder_load_attempted = True
+        try:
+            # Reduce CPU/memory pressure on small instances
+            try:
+                import torch
+
+                torch.set_num_threads(1)
+                torch.set_num_interop_threads(1)
+            except Exception:
+                pass
+
+            from sentence_transformers import SentenceTransformer
+
+            logger.info("🧠 Lazy-loading SentenceTransformer model: all-MiniLM-L6-v2")
+            _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+            return _embedder
+        except ImportError:
+            logger.warning("⚠️ sentence-transformers not installed or loading failed.")
+            return None
+        except Exception as e:
+            logger.error("❌ Failed to load SentenceTransformer: %s", e)
+            return None
 
 def generate_embedding(text: str) -> np.ndarray:
     """
@@ -52,6 +85,7 @@ def generate_embedding(text: str) -> np.ndarray:
         logger.warning("Empty text, returning zero vector.")
         return np.zeros(EMBEDDING_DIM, dtype=np.float32)
 
+    embedder = _get_embedder()
     if embedder is None:
         logger.error("Embedder is missing, returning zero vector.")
         return np.zeros(EMBEDDING_DIM, dtype=np.float32)
@@ -86,6 +120,7 @@ def generate_embeddings(text_list: list[str]) -> np.ndarray:
     if not text_list:
         return np.empty((0, EMBEDDING_DIM), dtype=np.float32)
 
+    embedder = _get_embedder()
     if embedder is None:
         logger.error("Embedder is missing, returning empty array.")
         return np.empty((0, EMBEDDING_DIM), dtype=np.float32)
