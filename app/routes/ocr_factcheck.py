@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 from app.services.ocr_service import extract_text_from_image
+from app.services.claim_extractor import extract_primary_claim
 from app.services.factcheck_engine import run_fact_check_pipeline
 
 # Initialize Router
@@ -16,16 +17,17 @@ async def fact_check_image(image: UploadFile = File(...)) -> Dict[str, Any]:
     """
     1) Receives uploaded screenshot
     2) Extracts text via OCR
-    3) Runs standard fact-checking pipeline on extracted text
-    4) Returns verdict
+    3) Isolates the factual claim via LLM
+    4) Runs standard fact-checking pipeline on extracted claim
+    5) Returns verdict
     """
     logger.info(f"📨 Received image for OCR fact-check: {image.filename}")
 
     # Validate file type
-    if not image.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+    if not image.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
         raise HTTPException(
             status_code=400, 
-            detail="Invalid file format. Please upload PNG, JPG, or JPEG."
+            detail="Invalid file format. Please upload PNG, JPG, JPEG, or WEBP."
         )
 
     temp_file_path = None
@@ -36,21 +38,32 @@ async def fact_check_image(image: UploadFile = File(...)) -> Dict[str, Any]:
             temp_file_path = temp_file.name
 
         # 2. Extract text with OCR
-        extracted_claim = extract_text_from_image(temp_file_path)
+        raw_ocr_text = extract_text_from_image(temp_file_path)
         
         # Check if text was found
-        if not extracted_claim or len(extracted_claim.strip()) < 5:
-            # If text is too short or empty, reject it
+        if not raw_ocr_text or len(raw_ocr_text.strip()) < 5:
             logger.warning("⚠️ OCR found no readable text or text is too short.")
             raise HTTPException(
                 status_code=400,
                 detail="No readable text detected in the image. Please upload a clear screenshot of the claim."
             )
 
-        logger.info(f"📝 OCR Extracted Claim: '{extracted_claim}'")
+        logger.info(f"📝 Raw OCR Text: '{raw_ocr_text}'")
 
-        # 3. Send extracted text to existing fact-checking pipeline
-        logger.info("🚀 Routing extracted claim to fact-check engine...")
+        # 3. Use LLM to cleanly extract the factual claim from OCR mess
+        extracted_claim = extract_primary_claim(raw_ocr_text)
+
+        if extracted_claim == "NO_CLAIM_FOUND":
+            logger.warning("⚠️ LLM could not parse a factual claim from OCR text.")
+            raise HTTPException(
+                status_code=400,
+                detail="No factual claims detected in this image. The image may just contain opinions or conversational text."
+            )
+
+        logger.info(f"🎯 Isolated Claim for Pipeline: '{extracted_claim}'")
+
+        # 4. Send isolated claim to existing fact-checking pipeline
+        logger.info("🚀 Routing isolated claim to fact-check engine...")
         result = run_fact_check_pipeline(extracted_claim)
         
         return result
@@ -62,7 +75,7 @@ async def fact_check_image(image: UploadFile = File(...)) -> Dict[str, Any]:
         logger.error(f"❌ Error during image fact-checking: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
     finally:
-        # 4. Cleanup: Delete temp image
+        # 5. Cleanup: Delete temp image
         if temp_file_path and os.path.exists(temp_file_path):
             os.remove(temp_file_path)
             logger.info(f"🧹 Cleaned up temporary image: {temp_file_path}")

@@ -16,11 +16,13 @@ class EvidenceItem(BaseModel):
         title: Title or headline of the evidence article.
         url: URL linking to the original source article.
         source: Name of the publishing source (e.g., Reuters, BBC).
+        snippet: Short extracted snippet of the relevant text.
     """
 
     title: str = Field(..., description="Headline of the evidence article.")
     url: str = Field(..., description="URL to the original source.")
     source: str = Field(default="", description="Publishing source name.")
+    snippet: str = Field(default="", description="Short snippet of relevant text.")
 
 
 class ConfidenceBreakdown(BaseModel):

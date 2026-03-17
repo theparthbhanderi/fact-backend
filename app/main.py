@@ -20,6 +20,8 @@ from app.routes.factcheck import router as factcheck_router
 from app.routes.ocr_factcheck import router as ocr_factcheck_router
 from app.routes.history import router as history_router
 from app.routes.analytics import router as analytics_router
+from app.routes.url_factcheck import router as url_factcheck_router
+from app.routes.translation import router as translation_router
 
 # ── Logging Configuration ──────────────────────────────────────────────
 logging.basicConfig(
@@ -62,6 +64,8 @@ app.include_router(factcheck_router, prefix="/api")
 app.include_router(ocr_factcheck_router, prefix="/api")
 app.include_router(history_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
+app.include_router(url_factcheck_router, prefix="/api")
+app.include_router(translation_router, prefix="/api")
 
 
 # ── Health Check ──────────────────────────────────────────────────────

@@ -56,12 +56,13 @@ def run_fact_check_pipeline(claim: str) -> dict:
     finally:
         db.close()
 
-    # ── Step 1: Collect Evidence Articles ──────────────────────────
-    logger.info("📰 Step 1: Collecting evidence articles via Multi-Source...")
-    articles = multi_source_search(norm_claim)
+    # ── Step 1 & 2: RAG Retrieval ─────────────────────────────────
+    logger.info("📰 Step 1 & 2: RAG Retrieval from Persistent FAISS & Live Fallback...")
+    retrieval = retrieve_relevant_evidence(norm_claim, top_k=3)
+    relevant = retrieval.get("relevant_articles", [])
 
-    if not articles:
-        logger.warning("No articles found — returning UNVERIFIED.")
+    if not relevant:
+        logger.warning("No relevant evidence found via RAG or Live Search — returning UNVERIFIED.")
         return {
             "original_claim": claim,
             "corrected_claim": corrected_claim,
@@ -74,18 +75,9 @@ def run_fact_check_pipeline(claim: str) -> dict:
                 "avg_source_score": 0.0,
                 "agreement_score": 0.0
             },
-            "explanation": "No relevant news articles could be found across trusted multi-source endpoints to verify this claim.",
+            "explanation": "No relevant evidence could be found in the knowledge base or via live multi-source search to verify this claim.",
             "evidence": [],
         }
-
-    # ── Step 2: Retrieve Top-K & Summarize ────────────────────────
-    logger.info(f"🔍 Step 2: Retrieving semantic matches from {len(articles)} articles...")
-    retrieval = retrieve_relevant_evidence(norm_claim, articles, top_k=3)
-    relevant = retrieval.get("relevant_articles", [])
-
-    if not relevant:
-        logger.warning("Vector search returned no results — falling back to top ranked sources.")
-        relevant = articles[:3]
 
     logger.info(f"📝 Step 2.5: Summarizing {len(relevant)} evidence articles...")
     summarized_evidence = []

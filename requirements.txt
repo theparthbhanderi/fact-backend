@@ -12,8 +12,9 @@ httpx==0.27.2
 newspaper3k==0.2.8
 lxml-html-clean==0.4.4
 
-# === AI / ML — Lightweight Embeddings (TF-IDF) ===
-scikit-learn>=1.3.0
+# === AI / ML — Dense Embeddings (RAG) ===
+sentence-transformers==3.1.0
+faiss-cpu==1.9.0
 numpy>=1.21.0,<2.0.0
 
 # === LLM ===

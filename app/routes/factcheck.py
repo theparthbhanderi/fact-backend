@@ -70,6 +70,7 @@ async def fact_check(request: FactCheckRequest):
                     title=e.get("title", ""),
                     url=e.get("url", ""),
                     source=e.get("source", ""),
+                    snippet=e.get("content", ""),
                 )
                 for e in result.get("evidence", [])
             ],
