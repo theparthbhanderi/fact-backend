@@ -10,6 +10,7 @@ Usage:
 """
 
 import logging
+import requests
 from newspaper import Article
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,32 @@ def extract_article(url: str) -> dict:
     logger.info(f"📄 Extracting article: {url}")
 
     try:
+        # 1. Try Jina Reader API (Best for clean Markdown extraction)
+        jina_url = f"https://r.jina.ai/{url}"
+        headers = {
+            "Accept": "application/json",
+            "X-Return-Format": "markdown"
+        }
+        
+        response = requests.get(jina_url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            jina_title = data.get("data", {}).get("title", "")
+            jina_text = data.get("data", {}).get("content", "")
+            if jina_text and len(jina_text.strip()) > 50:
+                logger.info(f"✅ Extracted {len(jina_text)} chars via Jina API: {url}")
+                return {
+                    "url": url,
+                    "title": jina_title,
+                    "text": jina_text,
+                    "summary": data.get("data", {}).get("description", ""),
+                    "publish_date": "",
+                }
+    except Exception as e:
+        logger.warning(f"⚠️ Jina API fetch failed: {e}. Falling back to newspaper3k.")
+
+    try:
+        # 2. Fallback to newspaper3k
         article = Article(url)
         article.download()
         article.parse()
