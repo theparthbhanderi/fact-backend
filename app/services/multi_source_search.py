@@ -8,6 +8,106 @@ from app.services.source_credibility import get_source_credibility
 
 logger = logging.getLogger(__name__)
 
+def search_google_fact_check(query: str, limit: int = 3) -> list[dict]:
+    """Search Google Fact Check Tools API for verified claims."""
+    if not settings.GOOGLE_FACT_CHECK_API_KEY:
+        return []
+    url = f"https://factchecktools.googleapis.com/v1alpha1/claims:search?query={urllib.parse.quote(query)}&key={settings.GOOGLE_FACT_CHECK_API_KEY}"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for claim in data.get("claims", [])[:limit]:
+            claim_review = claim.get("claimReview", [{}])[0]
+            results.append({
+                "title": claim.get("text", ""),
+                "url": claim_review.get("url", ""),
+                "source": claim_review.get("publisher", {}).get("name", "Google Fact Check API"),
+                "description": f"Verdict: {claim_review.get('textualRating', 'Unknown')}"
+            })
+        return results
+    except Exception as e:
+        logger.error(f"Google Fact Check API failed: {e}")
+        return []
+
+def search_gnews(query: str, limit: int = 5) -> list[dict]:
+    """Search GNews API."""
+    if not settings.GNEWS_API_KEY:
+        return []
+    url = f"https://gnews.io/api/v4/search?q={urllib.parse.quote(query)}&lang=en&max={limit}&apikey={settings.GNEWS_API_KEY}"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for a in data.get("articles", []):
+            results.append({
+                "title": a.get("title", ""),
+                "url": a.get("url", ""),
+                "source": a.get("source", {}).get("name", "GNews API"),
+                "description": a.get("description", "")
+            })
+        return results
+    except Exception as e:
+        logger.error(f"GNews API failed: {e}")
+        return []
+
+def search_newsdata(query: str, limit: int = 5) -> list[dict]:
+    """Search NewsData.io API."""
+    if not settings.NEWSDATA_API_KEY:
+        return []
+        
+    # Remove question marks or complex chars that might break strict APIs
+    clean_query = query.replace("?", "").replace("!", "")
+    
+    url = f"https://newsdata.io/api/1/news?apikey={settings.NEWSDATA_API_KEY}&q={urllib.parse.quote(clean_query)}&language=en"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for a in data.get("results", [])[:limit]:
+            results.append({
+                "title": a.get("title", ""),
+                "url": a.get("link", ""),
+                "source": str(a.get("source_id", "NewsData")).capitalize(),
+                "description": a.get("description", "")
+            })
+        return results
+    except Exception as e:
+        logger.error(f"NewsData API failed: {e}")
+        return []
+
+def search_tavily(query: str, limit: int = 5) -> list[dict]:
+    """Search Tavily AI Web Search API."""
+    if not settings.TAVILY_API_KEY:
+        return []
+    url = "https://api.tavily.com/search"
+    payload = {
+        "api_key": settings.TAVILY_API_KEY,
+        "query": query,
+        "search_depth": "advanced",
+        "include_answer": False,
+        "max_results": limit
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for r in data.get("results", []):
+            results.append({
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "source": "Tavily Search API",
+                "description": r.get("content", "")
+            })
+        return results
+    except Exception as e:
+        logger.error(f"Tavily API failed: {e}")
+        return []
+
 def search_newsapi(query: str, limit: int = 5) -> list[dict]:
     """Search NewsAPI for generic news."""
     if not settings.NEWS_API_KEY:
@@ -126,7 +226,12 @@ def multi_source_search(query: str) -> list[dict]:
     gn_results = search_google_news(query, limit=5)
     fc_results = search_factcheck_sites(query, limit=3)
     
-    all_results = newsapi_results + gn_results + fc_results
+    google_fc_results = search_google_fact_check(query, limit=3)
+    gnews_api_results = search_gnews(query, limit=5)
+    newsdata_results = search_newsdata(query, limit=5)
+    tavily_results = search_tavily(query, limit=5)
+    
+    all_results = newsapi_results + gn_results + fc_results + google_fc_results + gnews_api_results + newsdata_results + tavily_results
     
     # Deduplicate by URL
     unique_urls = set()

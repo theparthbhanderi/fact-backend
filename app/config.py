@@ -31,6 +31,15 @@ class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "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")
+    
+    # --- Advanced Search API Keys ---
+    GNEWS_API_KEY: str = os.getenv("GNEWS_API_KEY", "")
+    NEWSDATA_API_KEY: str = os.getenv("NEWSDATA_API_KEY", "")
+    TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
+    GOOGLE_FACT_CHECK_API_KEY: str = os.getenv("GOOGLE_FACT_CHECK_API_KEY", "")
+    GOOGLE_CLOUD_VISION_API_KEY: str = os.getenv("GOOGLE_CLOUD_VISION_API_KEY", "")
+    GOOGLE_CUSTOM_SEARCH_API_KEY: str = os.getenv("GOOGLE_CUSTOM_SEARCH_API_KEY", "")
+    GOOGLE_KNOWLEDGE_GRAPH_API_KEY: str = os.getenv("GOOGLE_KNOWLEDGE_GRAPH_API_KEY", "")
 
     # --- Model Configuration ---
     EMBEDDING_MODEL_NAME: str = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
