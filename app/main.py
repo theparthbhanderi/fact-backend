@@ -22,6 +22,7 @@ from app.routes.history import router as history_router
 from app.routes.analytics import router as analytics_router
 from app.routes.url_factcheck import router as url_factcheck_router
 from app.routes.translation import router as translation_router
+from app.routes.news_search import router as news_router
 
 # ── Logging Configuration ──────────────────────────────────────────────
 logging.basicConfig(
@@ -66,6 +67,7 @@ app.include_router(history_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(url_factcheck_router, prefix="/api")
 app.include_router(translation_router, prefix="/api")
+app.include_router(news_router, prefix="/api")
 
 
 # ── Health Check ──────────────────────────────────────────────────────

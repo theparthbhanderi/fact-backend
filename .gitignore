@@ -6,3 +6,9 @@ factchecker.db
 *.pyc
 w.env.render
 .env.render
+.DS_Store
+
+# Local artifacts / caches
+backend_log.txt
+cache.sqlite
+app/storage/

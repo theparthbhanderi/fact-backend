@@ -17,12 +17,37 @@ from app.models.response_models import (
     FactCheckResponse,
     ConfidenceBreakdown,
     EvidenceItem,
+    ClaimResult,
 )
 from app.services.factcheck_engine import run_fact_check_pipeline
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Fact-Check"])
+
+def _build_snippet(e: dict) -> str:
+    # UI should prefer the extracted evidence sentence
+    snippet = (
+        e.get("text")
+        or e.get("sentence")
+        or e.get("snippet")
+        or e.get("content")
+        or e.get("description")
+        or ""
+    )
+    snippet = snippet.strip()
+    if len(snippet) > 300:
+        return snippet[:300].rstrip() + "…"
+    return snippet
+
+def _clamp01(x: float) -> float:
+    if x != x:  # NaN
+        return 0.0
+    if x < 0.0:
+        return 0.0
+    if x > 1.0:
+        return 1.0
+    return x
 
 
 @router.post("/fact-check", response_model=FactCheckResponse)
@@ -54,6 +79,39 @@ async def fact_check(request: FactCheckRequest):
 
         # ── Build response ─────────────────────────────────────────
         breakdown = result.get("confidence_breakdown", {})
+        claims_results = result.get("claims", []) or []
+
+        def _to_claim_result(r: dict) -> ClaimResult:
+            br = r.get("confidence_breakdown", {}) or {}
+            return ClaimResult(
+                claim_id=r.get("claim_id", ""),
+                original_claim=r.get("original_claim", ""),
+                corrected_claim=r.get("corrected_claim", ""),
+                verdict=r.get("verdict", "UNVERIFIED"),
+                confidence=float(r.get("confidence", 0.0) or 0.0),
+                confidence_breakdown=ConfidenceBreakdown(
+                    llm_confidence=br.get("llm_confidence", 0.0),
+                    avg_similarity=br.get("avg_similarity", 0.0),
+                    avg_source_score=br.get("avg_source_score", 0.0),
+                ),
+                explanation=r.get("explanation", ""),
+                evidence=[
+                    EvidenceItem(
+                        title=e.get("title", ""),
+                        url=e.get("url", ""),
+                        source=e.get("source", ""),
+                        snippet=_build_snippet(e),
+                        credibility_score=_clamp01(float(e.get("source_credibility", e.get("credibility_score", 0.0)) or 0.0)),
+                        source_credibility=_clamp01(float(e.get("source_credibility", e.get("credibility_score", 0.0)) or 0.0)),
+                        similarity_score=_clamp01(
+                            float(e.get("similarity_score", e.get("score", 0.0)) or 0.0)
+                        ),
+                        evidence_rank=int(e.get("evidence_rank", 0) or 0),
+                    )
+                    for e in (r.get("evidence", []) or [])
+                ],
+            )
+
         response = FactCheckResponse(
             original_claim=result["original_claim"],
             corrected_claim=result["corrected_claim"],
@@ -70,10 +128,17 @@ async def fact_check(request: FactCheckRequest):
                     title=e.get("title", ""),
                     url=e.get("url", ""),
                     source=e.get("source", ""),
-                    snippet=e.get("content", ""),
+                    snippet=_build_snippet(e),
+                    credibility_score=_clamp01(float(e.get("source_credibility", e.get("credibility_score", 0.0)) or 0.0)),
+                    source_credibility=_clamp01(float(e.get("source_credibility", e.get("credibility_score", 0.0)) or 0.0)),
+                    similarity_score=_clamp01(
+                        float(e.get("similarity_score", e.get("score", 0.0)) or 0.0)
+                    ),
+                    evidence_rank=int(e.get("evidence_rank", 0) or 0),
                 )
                 for e in result.get("evidence", [])
             ],
+            claims=[_to_claim_result(r) for r in claims_results],
         )
 
         logger.info(

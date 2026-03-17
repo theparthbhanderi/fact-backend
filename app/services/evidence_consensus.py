@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Any, Tuple
-from app.services.llm_analyzer import get_client
+from app.services.openrouter_client import get_openrouter_client
 from app.config import settings
 import json
 
@@ -10,9 +10,9 @@ class EvidenceConsensusAnalyzer:
     """Analyzes extracted evidence to find consensus, agreement, or contradictions."""
     
     def __init__(self):
-        self.model = settings.LLM_MODEL_NAME
+        self.model = settings.MODEL_FACTCHECK_JUDGE
         try:
-            self.client = get_client()
+            self.client = get_openrouter_client()
         except Exception as e:
             logger.warning(f"Could not init LLM for consensus: {e}")
             self.client = None

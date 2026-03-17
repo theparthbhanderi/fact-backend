@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 from app.services.ocr_service import extract_text_from_image
-from app.services.claim_extractor import extract_primary_claim
+from app.services.claim_extractor import extract_primary_claims
 from app.services.factcheck_engine import run_fact_check_pipeline
 
 # Initialize Router
@@ -51,14 +51,16 @@ async def fact_check_image(image: UploadFile = File(...)) -> Dict[str, Any]:
         logger.info(f"📝 Raw OCR Text: '{raw_ocr_text}'")
 
         # 3. Use LLM to cleanly extract the factual claim from OCR mess
-        extracted_claim = extract_primary_claim(raw_ocr_text)
+        extracted_claims = extract_primary_claims(raw_ocr_text)
 
-        if extracted_claim == "NO_CLAIM_FOUND":
+        if not extracted_claims:
             logger.warning("⚠️ LLM could not parse a factual claim from OCR text.")
             raise HTTPException(
                 status_code=400,
                 detail="No factual claims detected in this image. The image may just contain opinions or conversational text."
             )
+            
+        extracted_claim = extracted_claims[0]
 
         logger.info(f"🎯 Isolated Claim for Pipeline: '{extracted_claim}'")
 

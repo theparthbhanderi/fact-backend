@@ -17,23 +17,34 @@ Usage:
 """
 
 import logging
+import urllib.parse
 from app.services.source_credibility import get_source_credibility
 
 logger = logging.getLogger(__name__)
 
 # ── Weights (Production Spec) ───────────────────────────────────────────
-W_SOURCE = 0.40        # Source credibility
-W_AGREEMENT = 0.30     # Evidence agreement 
-W_LLM = 0.30           # Reasoning certainty (LLM)
+# Phase 9 target:
+# - Source credibility: 40%
+# - Evidence agreement: 30%
+# - LLM certainty: 20%
+# - Semantic similarity: 10%
+W_SOURCE = 0.40
+W_AGREEMENT = 0.30
+W_LLM = 0.20
+W_SIMILARITY = 0.10
+# Keep knowledge_score input for backward compatibility, but do not weight it by default.
+W_KNOWLEDGE = 0.0
 
 # ── Limits ─────────────────────────────────────────────────────────────
 MAX_CONFIDENCE = 0.98   # Hard cap
+MIN_CONFIDENCE = 0.05
 
 
 def calculate_confidence(
     llm_confidence: float,
     evidence_list: list[dict],
     agreement_score: float = 0.0,
+    knowledge_score: float = 0.0,
 ) -> dict:
     """
     Calculate a multi-signal confidence score.
@@ -58,12 +69,22 @@ def calculate_confidence(
     # ── Sanitize LLM confidence ────────────────────────────────────
     llm_conf = max(0.0, min(1.0, float(llm_confidence)))
 
-    # ── Compute average similarity ─────────────────────────────────
-    similarity_scores = [
-        float(e.get("score", 0.0))
-        for e in evidence_list
-        if e.get("score") is not None
-    ]
+    # ── Compute average similarity (retrieved evidence scores) ─────
+    similarity_scores: list[float] = []
+    for e in evidence_list:
+        raw = (
+            e.get("similarity_score")
+            if e.get("similarity_score") is not None
+            else e.get("score")
+            if e.get("score") is not None
+            else e.get("relevance_score")
+            if e.get("relevance_score") is not None
+            else 0.0
+        )
+        try:
+            similarity_scores.append(float(raw))
+        except Exception:
+            similarity_scores.append(0.0)
     avg_similarity = (
         sum(similarity_scores) / len(similarity_scores)
         if similarity_scores
@@ -86,16 +107,40 @@ def calculate_confidence(
         W_LLM * llm_conf
         + W_SOURCE * avg_source_score
         + W_AGREEMENT * agreement_score
+        + W_SIMILARITY * avg_similarity
+        + W_KNOWLEDGE * max(0.0, min(1.0, float(knowledge_score)))
     )
 
+    # ── Source diversity penalty (unique domains) ──────────────────
+    domains = set()
+    for e in evidence_list:
+        url = (e.get("url") or "").strip()
+        if not url:
+            continue
+        try:
+            netloc = urllib.parse.urlparse(url).netloc.lower()
+            if netloc.startswith("www."):
+                netloc = netloc[4:]
+            if netloc:
+                domains.add(netloc)
+        except Exception:
+            continue
+    unique_domains = len(domains)
+    if unique_domains < 2 and evidence_list:
+        final *= 0.7
+
     # ── Clamp & round ──────────────────────────────────────────────
-    final = round(min(final, MAX_CONFIDENCE), 2)
+    final = max(MIN_CONFIDENCE, min(MAX_CONFIDENCE, final))
+    final = round(final, 2)
 
     logger.info(
         f"📊 Confidence Engine:\n"
         f"   LLM confidence:   {llm_conf:.2f} (×{W_LLM})\n"
         f"   Avg source score: {avg_source_score:.2f} (×{W_SOURCE})\n"
         f"   Agreement score:  {agreement_score:.2f} (×{W_AGREEMENT})\n"
+        f"   Avg similarity:   {avg_similarity:.2f} (×{W_SIMILARITY})\n"
+        f"   Knowledge score:  {float(knowledge_score):.2f} (×{W_KNOWLEDGE})\n"
+        f"   Unique domains:   {unique_domains} (penalty={'0.7x' if unique_domains < 2 and evidence_list else 'none'})\n"
         f"   Final confidence: {final}"
     )
 
@@ -105,6 +150,7 @@ def calculate_confidence(
         "avg_similarity": round(avg_similarity, 2),
         "avg_source_score": round(avg_source_score, 2),
         "agreement_score": round(agreement_score, 2),
+        "knowledge_score": round(float(knowledge_score), 2),
     }
 
 

@@ -43,10 +43,8 @@ def search_news(query: str, page_size: int = 5) -> list[dict]:
     logger.info(f"🔍 Searching news for: '{query}'")
 
     if not settings.NEWS_API_KEY:
-        logger.error("NEWS_API_KEY is not configured.")
-        raise RuntimeError(
-            "NEWS_API_KEY is not set. Add it to your .env file."
-        )
+        logger.warning("Missing API key; skipping NewsAPI fetch. key=%s", "NEWSAPI_KEY")
+        return []
 
     params = {
         "q": query,
@@ -80,10 +78,10 @@ def search_news(query: str, page_size: int = 5) -> list[dict]:
 
     except requests.exceptions.Timeout:
         logger.error("NewsAPI request timed out.")
-        raise RuntimeError("NewsAPI request timed out. Please try again.")
+        return []
     except requests.exceptions.ConnectionError:
         logger.error("Could not connect to NewsAPI.")
-        raise RuntimeError("Could not connect to NewsAPI. Check your network.")
+        return []
     except requests.exceptions.HTTPError as e:
         logger.error(f"NewsAPI HTTP error: {e}")
-        raise RuntimeError(f"NewsAPI HTTP error: {e}")
+        return []

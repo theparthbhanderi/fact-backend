@@ -1,5 +1,5 @@
 import logging
-from app.services.llm_analyzer import get_client
+from app.services.openrouter_client import get_openrouter_client
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -8,9 +8,9 @@ class EvidenceSummarizer:
     """Summarizes long article texts to prevent LLM context confusion and hallucination."""
     
     def __init__(self):
-        self.model = settings.LLM_MODEL_NAME
+        self.model = settings.MODEL_EVIDENCE_ANALYST
         try:
-            self.client = get_client()
+            self.client = get_openrouter_client()
         except Exception as e:
             logger.warning(f"Could not initialize LLM client for summarizer: {e}")
             self.client = None

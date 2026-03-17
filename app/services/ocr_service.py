@@ -1,89 +1,105 @@
 import logging
 import re
-import requests
-import base64
-from app.config import settings
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor
+from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+_tesseract_available: Optional[bool] = None
+
+
+def _easyocr_extract_in_subprocess(image_path: str) -> str:
+    """
+    Run EasyOCR inside a subprocess.
+
+    Torch/OpenMP can segfault the interpreter on some macOS builds. Doing OCR in
+    a subprocess ensures a crash does NOT take down the FastAPI server process.
+    """
+    import os
+
+    # Reduce chance of OpenMP-related crashes / oversubscription
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+
+    import easyocr
+
+    reader = easyocr.Reader(["en"], gpu=False)
+    results = reader.readtext(image_path)
+    extracted_texts = [res[1] for res in results]
+    return " ".join(extracted_texts)
+
+
+def _try_easyocr(image_path: str, timeout_s: int = 60) -> Optional[str]:
+    """
+    Attempt EasyOCR without importing torch in the main process.
+    Returns extracted text or None if unavailable/crashes/timeouts.
+    """
+    try:
+        ctx = mp.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as ex:
+            fut = ex.submit(_easyocr_extract_in_subprocess, image_path)
+            return fut.result(timeout=timeout_s)
+    except Exception as e:
+        logger.warning(f"⚠️ EasyOCR failed (will fallback): {str(e)}")
+        return None
+
+
+def _check_tesseract_available() -> bool:
+    global _tesseract_available
+    if _tesseract_available is not None:
+        return _tesseract_available
+    try:
+        import pytesseract
+
+        _ = pytesseract.get_tesseract_version()
+        _tesseract_available = True
+        return True
+    except Exception:
+        _tesseract_available = False
+        return False
 
 def clean_ocr_text(text: str) -> str:
     """Clean the text extracted by OCR."""
     if not text:
         return ""
-    # Remove multiple newlines and spaces
     text = re.sub(r'\n+', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
 def extract_text_from_image(image_path: str) -> str:
     """
-    Extract text from an uploaded image using the OpenRouter Vision API (e.g., Gemma 3).
-    Replaces OCR.Space for a premium and fast experience.
+    Extract text from an uploaded image.
+
+    Strategy:
+    - Prefer EasyOCR if installed (no external system dependency).
+    - Fallback to Tesseract (pytesseract) if available.
     """
     try:
-        logger.info(f"🖼️ Running OCR on image via OpenRouter Vision API: {image_path}")
-        
-        # Convert image to base64
-        with open(image_path, "rb") as image_file:
-            base64_img = base64.b64encode(image_file.read()).decode('utf-8')
-            
-        # Determine image format
-        ext = image_path.lower().split('.')[-1]
-        base64_prefix = f"data:image/{ext};base64,"
-        full_base64 = base64_prefix + base64_img
+        logger.info(f"🖼️ Running OCR on: {image_path}")
 
-        headers = {
-            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-            "HTTP-Referer": "http://localhost:5173",
-            "X-Title": "AI Fact-Checker",
-            "Content-Type": "application/json"
-        }
+        # Prefer EasyOCR (subprocess) when available
+        text = _try_easyocr(image_path)
+        if text:
+            cleaned = clean_ocr_text(text)
+            logger.info(f"✅ EasyOCR Extracted: {len(cleaned)} chars")
+            return cleaned
 
-        payload = {
-            "model": settings.OCR_MODEL_NAME,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Extract all readable text from this image accurately. Return ONLY the extracted text. Do not provide markdown formatting around the output, no commentary, and no extra details."
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": full_base64
-                            }
-                        }
-                    ]
-                }
-            ],
-            "temperature": 0.1
-        }
-        
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            json=payload,
-            headers=headers,
-            timeout=60 # Vision models can take a bit longer
+        if _check_tesseract_available():
+            import pytesseract
+            from PIL import Image
+
+            logger.info(f"🖼️ Running OCR (Tesseract) on: {image_path}")
+            text = pytesseract.image_to_string(Image.open(image_path))
+            cleaned = clean_ocr_text(text)
+            logger.info(f"✅ Tesseract Extracted: {len(cleaned)} chars")
+            return cleaned
+
+        raise RuntimeError(
+            "OCR is not available. Install `easyocr` (recommended) or install Tesseract "
+            "and ensure it is on PATH."
         )
-        
-        if response.status_code != 200:
-            logger.error(f"OpenRouter API Error: {response.text}")
-            raise RuntimeError(f"OpenRouter API returned status {response.status_code}")
-            
-        result = response.json()
-        
-        if "choices" not in result or len(result["choices"]) == 0:
-            logger.error(f"Invalid OpenRouter response structure: {result}")
-            raise RuntimeError("OpenRouter API returned an invalid structure.")
-            
-        extracted_text = result["choices"][0]["message"]["content"]
-        cleaned_text = clean_ocr_text(extracted_text)
-        
-        logger.info(f"✅ OCR Extracted Text ({len(cleaned_text)} chars)")
-        return cleaned_text
-        
+
     except Exception as e:
-        logger.error(f"❌ OCR extraction failed: {str(e)}")
+        logger.error(f"❌ Local OCR extraction failed: {str(e)}")
         raise e

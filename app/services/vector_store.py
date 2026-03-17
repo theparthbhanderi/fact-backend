@@ -63,25 +63,38 @@ class VectorStore:
     def add_documents(self, documents: list[dict]) -> int:
         """
         Embed and add documents to the FAISS store persistently.
-        Deduplicates based on URL.
+        Deduplicates based on doc_id (preferred) or URL.
         """
         if not documents:
             return 0
 
-        valid_docs = [d for d in documents if d.get("text", "").strip()]
+        valid_docs = [d for d in documents if d.get("text", d.get("description", "")).strip()]
         if not valid_docs:
             return 0
 
         # Optional deduplication against existing
-        existing_urls = {m.get("url") for m in self.metadata if m.get("url")}
-        new_docs = [d for d in valid_docs if d.get("url") not in existing_urls and "url" in d]
+        existing_keys = set()
+        for m in self.metadata:
+            if m.get("doc_id"):
+                existing_keys.add(m.get("doc_id"))
+            elif m.get("url"):
+                existing_keys.add(m.get("url"))
+
+        new_docs = []
+        for d in valid_docs:
+            key = d.get("doc_id") or d.get("url")
+            if not key:
+                continue
+            if key in existing_keys:
+                continue
+            new_docs.append(d)
         
         # If all were duplicates or lacking URLs, skip adding nothing
         if not new_docs:
             logger.info("No new unique documents to add to FAISS.")
             return 0
 
-        texts = [d["text"] for d in new_docs]
+        texts = [d.get("text", d.get("description", "")) for d in new_docs]
         embeddings = generate_embeddings(texts)
         
         if embeddings.shape[0] == 0:
@@ -95,14 +108,21 @@ class VectorStore:
         
         # Add metadata
         for doc in new_docs:
-            self.metadata.append({
+            # Preserve core fields and keep the rest in "extra"
+            core = {
+                "doc_id": doc.get("doc_id"),
+                "doc_type": doc.get("doc_type", "evidence"),
                 "title": doc.get("title", ""),
                 "url": doc.get("url", ""),
-                "text": doc.get("text", ""),
+                "text": doc.get("text", doc.get("description", "")),
                 "source": doc.get("source", ""),
                 "summary": doc.get("summary", ""),
                 "publish_date": doc.get("publish_date", ""),
-            })
+                "timestamp": doc.get("timestamp", ""),
+            }
+            extra = {k: v for k, v in doc.items() if k not in core}
+            core["extra"] = extra
+            self.metadata.append(core)
 
         self._save()
         logger.info(f"✅ Added {len(new_docs)} documents to persistent VectorStore.")
@@ -129,11 +149,14 @@ class VectorStore:
             score = round(1.0 / (1.0 + float(dist)), 4)
             
             results.append({
+                "doc_id": meta.get("doc_id"),
+                "doc_type": meta.get("doc_type", "evidence"),
                 "title": meta["title"],
                 "url": meta["url"],
                 "text": meta["text"],
                 "source": meta["source"],
                 "score": score,
+                "extra": meta.get("extra", {}),
             })
 
         logger.info(f"🔍 Search for '{query[:60]}...' yielded {len(results)} matches.")
