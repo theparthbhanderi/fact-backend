@@ -2,6 +2,7 @@ import logging
 import requests
 import urllib.parse
 import xml.etree.ElementTree as ET
+import wikipedia
 from app.config import settings
 from app.services.source_credibility import get_source_credibility
 
@@ -81,6 +82,39 @@ def search_factcheck_sites(query: str, limit: int = 3) -> list[dict]:
     
     return search_google_news(advanced_query, limit=limit)
 
+def search_wikipedia(query: str, limit: int = 2) -> list[dict]:
+    """Fallback search using Wikipedia for background knowledge when news APIs fail."""
+    try:
+        logger.info(f"📚 Searching Wikipedia fallback for: '{query}'")
+        search_results = wikipedia.search(query, results=limit)
+        results = []
+        for title in search_results:
+            try:
+                page = wikipedia.page(title, auto_suggest=False)
+                results.append({
+                    "title": page.title,
+                    "url": page.url,
+                    "source": "Wikipedia",
+                    "description": page.summary[:500] + "..." if len(page.summary) > 500 else page.summary
+                })
+            except wikipedia.exceptions.DisambiguationError as e:
+                # Just take the first disambiguation option if necessary
+                if e.options:
+                    page = wikipedia.page(e.options[0], auto_suggest=False)
+                    results.append({
+                        "title": page.title,
+                        "url": page.url,
+                        "source": "Wikipedia",
+                        "description": page.summary[:500] + "..." if len(page.summary) > 500 else page.summary
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to fetch wikipedia page {title}: {e}")
+                continue
+        return results
+    except Exception as e:
+        logger.error(f"Wikipedia search failed: {e}")
+        return []
+
 def multi_source_search(query: str) -> list[dict]:
     """
     Search multiple sources, combine results, remove duplicates, 
@@ -115,5 +149,14 @@ def multi_source_search(query: str) -> list[dict]:
     
     # Return top 8 most credible and relevant articles
     final_results = deduped_results[:8]
+    
+    # --- FALLBACK LAYER: WIKIPEDIA ---
+    if not final_results:
+        logger.warning(f"⚠️ No news articles found for '{query}'. Falling back to Wikipedia.")
+        wiki_results = search_wikipedia(query, limit=3)
+        for item in wiki_results:
+            item["credibility_score"] = get_source_credibility(item["source"], item["url"])
+            final_results.append(item)
+            
     logger.info(f"✅ Compiled {len(final_results)} unique articles from multiple sources.")
     return final_results

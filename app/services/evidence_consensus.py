@@ -69,18 +69,23 @@ Respond ONLY with a valid JSON object matching this schema:
             status = result.get("status", "INCONCLUSIVE")
             hca_count = result.get("high_credibility_agreement_count", 0)
             
-            bonus = 0.0
-            if status == "AGREEMENT" and hca_count >= 3:
-                bonus = 0.15 # Strong agreement bonus
-            elif status == "AGREEMENT" and hca_count >= 2:
-                bonus = 0.05
+            score = 0.5 # Neutral inconclusive
+            if status == "AGREEMENT":
+                if hca_count >= 3:
+                    score = 1.0 # Perfect agreement across robust sources
+                elif hca_count >= 2:
+                    score = 0.8
+                else:
+                    score = 0.6
+            elif status == "CONTRADICTION":
+                score = 0.0
                 
-            logger.info(f"⚖️ Consensus Analysis: {status} (Bonus: +{bonus})")
-            return status, bonus
+            logger.info(f"⚖️ Consensus Analysis: {status} (Agreement Score: {score:.2f})")
+            return status, score
             
         except Exception as e:
             logger.error(f"Consensus analysis failed: {e}")
-            return "INCONCLUSIVE", 0.0
+            return "INCONCLUSIVE", 0.5
 
 consensus_analyzer = EvidenceConsensusAnalyzer()
 

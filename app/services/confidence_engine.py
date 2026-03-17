@@ -21,11 +21,10 @@ from app.services.source_credibility import get_source_credibility
 
 logger = logging.getLogger(__name__)
 
-# ── Weights (IMPROVEMENT 10) ───────────────────────────────────────────
-W_LLM = 0.40           # LLM reasoning confidence
-W_SOURCE = 0.30        # Source credibility
-W_AGREEMENT = 0.20     # Evidence agreement (consensus bonus)
-W_SIMILARITY = 0.10    # Evidence semantic similarity
+# ── Weights (Production Spec) ───────────────────────────────────────────
+W_SOURCE = 0.40        # Source credibility
+W_AGREEMENT = 0.30     # Evidence agreement 
+W_LLM = 0.30           # Reasoning certainty (LLM)
 
 # ── Limits ─────────────────────────────────────────────────────────────
 MAX_CONFIDENCE = 0.98   # Hard cap
@@ -85,7 +84,6 @@ def calculate_confidence(
     # ── Weighted combination ───────────────────────────────────────
     final = (
         W_LLM * llm_conf
-        + W_SIMILARITY * avg_similarity
         + W_SOURCE * avg_source_score
         + W_AGREEMENT * agreement_score
     )
@@ -96,7 +94,6 @@ def calculate_confidence(
     logger.info(
         f"📊 Confidence Engine:\n"
         f"   LLM confidence:   {llm_conf:.2f} (×{W_LLM})\n"
-        f"   Avg similarity:   {avg_similarity:.2f} (×{W_SIMILARITY})\n"
         f"   Avg source score: {avg_source_score:.2f} (×{W_SOURCE})\n"
         f"   Agreement score:  {agreement_score:.2f} (×{W_AGREEMENT})\n"
         f"   Final confidence: {final}"
