@@ -30,10 +30,12 @@ class Settings:
     NEWS_API_KEY: str = os.getenv("NEWS_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "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")
 
     # --- Model Configuration ---
     EMBEDDING_MODEL_NAME: str = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
     LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+    OCR_MODEL_NAME: str = os.getenv("OCR_MODEL_NAME", "google/gemma-3-27b-it:free")
 
     # --- Server Configuration ---
     BACKEND_HOST: str = os.getenv("BACKEND_HOST", "0.0.0.0")

@@ -2,6 +2,7 @@ import logging
 import re
 import requests
 import base64
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +17,11 @@ def clean_ocr_text(text: str) -> str:
 
 def extract_text_from_image(image_path: str) -> str:
     """
-    Extract text from an uploaded image using the free OCR.Space API.
-    Replaces Tesseract to avoid complex system requirements.
+    Extract text from an uploaded image using the OpenRouter Vision API (e.g., Gemma 3).
+    Replaces OCR.Space for a premium and fast experience.
     """
     try:
-        logger.info(f"🖼️ Running OCR on image via Cloud API: {image_path}")
+        logger.info(f"🖼️ Running OCR on image via OpenRouter Vision API: {image_path}")
         
         # Convert image to base64
         with open(image_path, "rb") as image_file:
@@ -31,36 +32,54 @@ def extract_text_from_image(image_path: str) -> str:
         base64_prefix = f"data:image/{ext};base64,"
         full_base64 = base64_prefix + base64_img
 
-        # Send to OCR.Space API (free public key)
+        headers = {
+            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+            "HTTP-Referer": "http://localhost:5173",
+            "X-Title": "AI Fact-Checker",
+            "Content-Type": "application/json"
+        }
+
         payload = {
-            "apikey": "helloworld",
-            "base64Image": full_base64,
-            "language": "eng",
-            "OCREngine": 2, # Engine 2 is better for complex/screenshot text
+            "model": settings.OCR_MODEL_NAME,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Extract all readable text from this image accurately. Return ONLY the extracted text. Do not provide markdown formatting around the output, no commentary, and no extra details."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": full_base64
+                            }
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.1
         }
         
         response = requests.post(
-            "https://api.ocr.space/parse/image",
-            data=payload,
-            timeout=30 # 30s timeout
+            "https://openrouter.ai/api/v1/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=60 # Vision models can take a bit longer
         )
         
         if response.status_code != 200:
-            raise RuntimeError(f"OCR API returned status {response.status_code}")
+            logger.error(f"OpenRouter API Error: {response.text}")
+            raise RuntimeError(f"OpenRouter API returned status {response.status_code}")
             
         result = response.json()
         
-        if result.get("IsErroredOnProcessing"):
-            error_msg = result.get('ErrorMessage', ['Unknown error'])[0]
-            raise RuntimeError(f"OCR API error: {error_msg}")
+        if "choices" not in result or len(result["choices"]) == 0:
+            logger.error(f"Invalid OpenRouter response structure: {result}")
+            raise RuntimeError("OpenRouter API returned an invalid structure.")
             
-        # Extract parsed text
-        parsed_text = ""
-        for parsed_result in result.get("ParsedResults", []):
-            if parsed_result.get("ParsedText"):
-                parsed_text += parsed_result["ParsedText"] + " "
-                
-        cleaned_text = clean_ocr_text(parsed_text)
+        extracted_text = result["choices"][0]["message"]["content"]
+        cleaned_text = clean_ocr_text(extracted_text)
         
         logger.info(f"✅ OCR Extracted Text ({len(cleaned_text)} chars)")
         return cleaned_text
